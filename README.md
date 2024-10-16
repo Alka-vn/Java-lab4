@@ -1,5 +1,4 @@
 # Java-lab4
-==============================================================
 # Agent-Based System: Quick Start Guide
 
 ## Overview
