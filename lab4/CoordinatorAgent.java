@@ -60,6 +60,7 @@ public class CoordinatorAgent extends Agent {
         if (myGui != null) {
             myGui.dispose();  // Clean up the GUI
         }
+        shutdownAllAgents();
         System.out.println("Coordinator Agent " + getLocalName() + " terminating.");
     }
 
