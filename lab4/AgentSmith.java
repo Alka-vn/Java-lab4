@@ -1,139 +1,84 @@
 package lab4;
 
 import jade.core.Agent;
+import jade.core.behaviours.TickerBehaviour;
 import jade.core.behaviours.CyclicBehaviour;
 import jade.lang.acl.ACLMessage;
+import jade.domain.DFService;
+import jade.domain.FIPAAgentManagement.DFAgentDescription;
+import jade.domain.FIPAAgentManagement.ServiceDescription;
+import jade.domain.FIPAException;
 import java.io.*;
 import java.net.Socket;
-import java.util.Random;
 
 public class AgentSmith extends Agent {
-    private String serverIp = "127.0.0.1";  // Use loopback IP for local testing
-    private String agentName;  // Store agent's name
-    private boolean alive = true;  // Agent stays alive
-    private int currentRange;  // Poke range based on agent number
-    private Random rand = new Random();
+    private boolean shouldShutdown = false;  // Flag to check if agent should stop
+    //private String server_ip = "gracealkaloadbalancer-5fb259f53bc18996.elb.eu-north-1.amazonaws.com";
+    private String server_ip = "127.0.0.1";
 
+    private int server_port = 8005;
     protected void setup() {
-        agentName = getLocalName();  // Get the agent's name
-        System.out.println(agentName + " is ready.");
+        System.out.println("Agent " + getLocalName() + " is ready.");
 
-        // Set initial range to agent number - 1
-        currentRange = getAgentNumber() - 1;
+        // Register the agent with the DF under the service type "AgentSmith"
+        DFAgentDescription dfd = new DFAgentDescription();
+        dfd.setName(getAID());
+        ServiceDescription sd = new ServiceDescription();
+        sd.setType("AgentSmith");  // Service type
+        sd.setName(getLocalName());  // Agent's name
+        dfd.addServices(sd);
+        try {
+            DFService.register(this, dfd);
+            System.out.println(getLocalName() + " registered with DF.");
+        } catch (FIPAException e) {
+            e.printStackTrace();
+        }
 
-        // Register the agent with the server
-        registerAgent();
+        // Add a behavior to periodically try connecting to the server
+        addBehaviour(new TickerBehaviour(this, 5000) { // Every 5 seconds
+            protected void onTick() {
+                if (shouldShutdown) {
+                    System.out.println(getLocalName() + ": Shutting down.");
+                    doDelete();  // Terminate the agent
+                    return;
+                }
 
-        // Continuously poke other agents
+                // Usual connection behavior to the server
+                try {
+                    Socket socket = new Socket(server_ip,server_port);  // Replace with your EC2 public IP
+                    PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
+
+                    // Send the agent's name to the server
+                    out.println(getLocalName());
+                    socket.close();
+                    System.out.println(getLocalName() + ": Connected and name sent to the server.");
+                } catch (IOException e) {
+                    System.out.println(getLocalName() + ": Couldn't connect to the server.");
+                }
+            }
+        });
+
+        // Add a behavior to listen for shutdown message
         addBehaviour(new CyclicBehaviour() {
             public void action() {
-                if (alive) {
-                    String targetAgent = getRandomAgent();  // Get a random agent to poke
-                    boolean success = pokeAgent(targetAgent);
-
-                    // If the poke was successful, update the range
-                    if (success) {
-                        int targetAgentNumber = Integer.parseInt(targetAgent.replace("Smith", ""));
-                        currentRange = Math.max(currentRange, targetAgentNumber * 2);  // Double the number or keep range the same
-                        System.out.println(agentName + " successfully poked " + targetAgent + ". New range: " + currentRange);
-                    }
-                }
-
-                // Listen for kill messages from the coordinator
                 ACLMessage msg = receive();
                 if (msg != null && msg.getContent().equals("shutdown")) {
-                    takeDown();
+                    shouldShutdown = true;  // Set the shutdown flag to true
+                } else {
+                    block();  // Block until another message arrives
                 }
-
-                block(3000);  // Poke every 3 seconds
             }
         });
     }
 
-    // Method to extract the agent number from the agent name (e.g., Smith5 -> 5)
-    private int getAgentNumber() {
-        return Integer.parseInt(agentName.replace("Smith", ""));
-    }
-
-    // Method to register the agent with the server
-    private void registerAgent() {
-        try (Socket socket = new Socket(serverIp, 8080);
-             PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
-             BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()))) {
-
-            // Create a REGISTER message
-            AgentMessage message = new AgentMessage("REGISTER", agentName, null, "Registering agent");
-
-            // Send the REGISTER message
-            out.println(message.toString());
-
-            // Read the structured server response
-            String response = in.readLine();
-            AgentMessage reply = AgentMessage.fromString(response);
-            System.out.println("Server response: " + reply.getContent());
-
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-    }
-
-    // Method to poke another agent through the server
-    private boolean pokeAgent(String targetAgent) {
-        try (Socket socket = new Socket(serverIp, 8080);
-             PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
-             BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()))) {
-
-            // Create a POKE message
-            AgentMessage message = new AgentMessage("POKE", agentName, targetAgent, "Attempting to poke");
-
-            // Log the poke request
-            System.out.println(message.toString());
-
-            // Send the POKE message to the server
-            out.println(message.toString());
-
-            // Read the structured server response
-            String response = in.readLine();
-            AgentMessage reply = AgentMessage.fromString(response);
-            System.out.println("Server response: " + reply.getContent());
-
-            // If the response contains "Failed", the poke was not successful
-            boolean success = !reply.getContent().contains("Failed");
-
-            // Return true if successful, false if not
-            return success;
-
-        } catch (IOException e) {
-            e.printStackTrace();
-            return false;
-        }
-    }
-
-    // Helper method to pick a random agent number within the current range
-    private String getRandomAgent() {
-        int randomAgentNumber = rand.nextInt(currentRange) + 1;  // Random number between 1 and currentRange
-        return "Smith" + randomAgentNumber;
-    }
-
-    // Method to simulate shutting down the agent
+    // Deregister the agent from DF when it shuts down
     protected void takeDown() {
-        System.out.println(agentName + " is shutting down.");
-        alive = false;  // Stop poking when agent shuts down
-
-        // Notify the server that the agent is shutting down
-        try (Socket socket = new Socket(serverIp, 8080);
-             PrintWriter out = new PrintWriter(socket.getOutputStream(), true)) {
-
-            // Create an UNREGISTER message
-            AgentMessage message = new AgentMessage("UNREGISTER", agentName, null, "Unregistering agent");
-
-            // Send the UNREGISTER message
-            out.println(message.toString());
-
-        } catch (IOException e) {
+        try {
+            DFService.deregister(this);
+            System.out.println(getLocalName() + " deregistered from DF.");
+        } catch (FIPAException e) {
             e.printStackTrace();
         }
-
-        doDelete();  // Proper JADE agent termination
+        System.out.println("Agent " + getLocalName() + " terminating.");
     }
 }

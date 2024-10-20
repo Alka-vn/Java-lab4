@@ -2,82 +2,99 @@ package lab4;
 
 import java.io.*;
 import java.net.*;
-import java.util.*;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.Map;
 
 public class MultiThreadedTCPServer {
-    private static Map<String, String> agentSockets = new HashMap<>();  // Track connected agents by name
+    private static Map<String, Socket> agentSockets = new HashMap<>();  // Track agent sockets
+    private static final SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
 
     public static void main(String[] args) throws IOException {
-        int port = 8080;
+        int port = 8005;
         ServerSocket serverSocket = new ServerSocket(port);
-        System.out.println("Server started on port " + port);
+        log("INFO", "Server started and listening on port " + port);
 
         while (true) {
-            Socket clientSocket = serverSocket.accept();
-            new ClientHandler(clientSocket).start();
+            // Wait for a client connection
+            Socket socket = serverSocket.accept();
+            log("INFO", "New client connected");
+
+            // Pass the agentSockets map to the ClientHandler
+            new ClientHandler(socket, agentSockets).start();
         }
     }
 
-    // ClientHandler to handle each agent connection
-    private static class ClientHandler extends Thread {
-        private Socket socket;
-        private String agentName;  // Store agent's name for logging
+    // Log method with levels
+    private static void log(String level, String message) {
+        String timestamp = dateFormat.format(new Date());
+        System.out.println("[" + timestamp + "][" + level + "] " + message);
+    }
+}
 
-        public ClientHandler(Socket socket) {
-            this.socket = socket;
-        }
+// A separate thread for each client connection
+class ClientHandler extends Thread {
+    private Socket socket;
+    private Map<String, Socket> agentSockets;  // Reference to the shared agentSockets map
 
-        public void run() {
-            try (BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-                 PrintWriter out = new PrintWriter(socket.getOutputStream(), true)) {
+    public ClientHandler(Socket socket, Map<String, Socket> agentSockets) {
+        this.socket = socket;
+        this.agentSockets = agentSockets;  // Assign the shared map reference
+    }
 
-                // Read the incoming message
-                String input = in.readLine();
-                AgentMessage receivedMessage = AgentMessage.fromString(input);
-                agentName = receivedMessage.getAgentName();  // Get the sender's name
+    public void run() {
+        try {
+            // Get input stream to read from client
+            BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+            PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
 
-                // Check the performative and handle the message accordingly
-                if (receivedMessage.getPerformative().equals("REGISTER")) {
-                    agentSockets.put(agentName, agentName);  // Store the agent's name
+            // Read the message from the agent
+            String message = in.readLine();
+            if (message != null) {
+                // Handle registration
+                if (message.startsWith("REGISTER|")) {
+                    String agentName = message.split("\\|")[1];
+                    agentSockets.put(agentName, socket);  // Track the agent's socket
+                    log("INFO", agentName + " registered with the server.");
+                    out.println("REGISTRATION SUCCESSFUL");
 
-                    // Create a structured REPLY message
-                    AgentMessage reply = new AgentMessage("REPLY", "Server", agentName, "Registered successfully");
-                    out.println(reply.toString());  // Send the reply back
+                    // Handle messages from senders
+                } else if (message.startsWith("SEND|")) {
+                    String[] parts = message.split("\\|");
+                    String sender = parts[1];
+                    String content = parts[2];
 
-                    // Log the registration
-                    System.out.println("Agent registered: " + agentName);
-
-                } else if (receivedMessage.getPerformative().equals("POKE")) {
-                    String targetAgent = receivedMessage.getTargetAgent();
-
-                    // Log the poke request
-                    System.out.println(agentName + " wants to poke " + targetAgent);
-
-                    AgentMessage reply;
-                    if (agentSockets.containsKey(targetAgent)) {
-                        // Target agent found, reply with success
-                        reply = new AgentMessage("REPLY", "Server", agentName, "Poking back from " + targetAgent);
+                    // Forward the message to an even-numbered agent
+                    String receiver = getReceiverForSender(sender);
+                    if (receiver != null && agentSockets.containsKey(receiver)) {
+                        Socket receiverSocket = agentSockets.get(receiver);
+                        PrintWriter receiverOut = new PrintWriter(receiverSocket.getOutputStream(), true);
+                        receiverOut.println("Message from " + sender + ": " + content);
+                        log("INFO", "Forwarded message from " + sender + " to " + receiver);
                     } else {
-                        // Target agent not found, reply with failure
-                        reply = new AgentMessage("REPLY", "Server", agentName, "Failed: agent not found");
+                        log("WARN", "No receiver found for " + sender);
                     }
-
-                    // Send the reply back
-                    out.println(reply.toString());
-
-                } else if (receivedMessage.getPerformative().equals("UNREGISTER")) {
-                    // Unregister the agent
-                    agentSockets.remove(agentName);
-                    System.out.println("Agent unregistered: " + agentName);
-
-                    // Send back confirmation
-                    AgentMessage reply = new AgentMessage("REPLY", "Server", agentName, "Unregistered successfully");
-                    out.println(reply.toString());
                 }
-
-            } catch (IOException e) {
-                e.printStackTrace();
             }
+
+            socket.close();  // Close the connection after handling
+        } catch (IOException e) {
+            log("ERROR", "Error handling client: " + e.getMessage());
         }
+    }
+
+    // Helper method to get the corresponding even-numbered receiver for a sender
+    private String getReceiverForSender(String sender) {
+        int senderNumber = Integer.parseInt(sender.replace("Smith", ""));
+        int receiverNumber = senderNumber + 1;  // Assume receiver is the next agent (even-numbered)
+        String receiver = "Smith" + receiverNumber;
+        return agentSockets.containsKey(receiver) ? receiver : null;
+    }
+
+    // Log method with levels
+    private static void log(String level, String message) {
+        String timestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date());
+        System.out.println("[" + timestamp + "][" + level + "] " + message);
     }
 }
