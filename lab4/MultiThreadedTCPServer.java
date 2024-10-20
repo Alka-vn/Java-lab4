@@ -18,11 +18,15 @@ public class MultiThreadedTCPServer {
 
         while (true) {
             // Wait for a client connection
-            Socket socket = serverSocket.accept();
-            log("INFO", "New client connected");
+            try {
+                Socket socket = serverSocket.accept();
+                log("INFO", "New client connected");
 
-            // Pass the agentSockets map to the ClientHandler
-            new ClientHandler(socket, agentSockets).start();
+                // Pass the agentSockets map to the ClientHandler
+                new ClientHandler(socket, agentSockets).start();
+            } catch (IOException e) {
+                log("ERROR", "Error accepting connection: " + e.getMessage());
+            }
         }
     }
 
@@ -45,6 +49,11 @@ class ClientHandler extends Thread {
 
     public void run() {
         try {
+            if (socket.isClosed()) {
+                log("ERROR", "Socket is already closed.");
+                return;
+            }
+
             // Get input stream to read from client
             BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
             PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
@@ -69,18 +78,30 @@ class ClientHandler extends Thread {
                     String receiver = getReceiverForSender(sender);
                     if (receiver != null && agentSockets.containsKey(receiver)) {
                         Socket receiverSocket = agentSockets.get(receiver);
-                        PrintWriter receiverOut = new PrintWriter(receiverSocket.getOutputStream(), true);
-                        receiverOut.println("Message from " + sender + ": " + content);
-                        log("INFO", "Forwarded message from " + sender + " to " + receiver);
+                        if (!receiverSocket.isClosed()) {
+                            PrintWriter receiverOut = new PrintWriter(receiverSocket.getOutputStream(), true);
+                            receiverOut.println("Message from " + sender + ": " + content);
+                            log("INFO", "Forwarded message from " + sender + " to " + receiver);
+                        } else {
+                            log("WARN", "Receiver socket is closed.");
+                        }
                     } else {
                         log("WARN", "No receiver found for " + sender);
                     }
                 }
+            } else {
+                log("WARN", "Received null message.");
             }
 
-            socket.close();  // Close the connection after handling
         } catch (IOException e) {
             log("ERROR", "Error handling client: " + e.getMessage());
+        } finally {
+            try {
+                socket.close();  // Close the connection after handling
+                log("INFO", "Socket closed.");
+            } catch (IOException e) {
+                log("ERROR", "Error closing socket: " + e.getMessage());
+            }
         }
     }
 
