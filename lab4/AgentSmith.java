@@ -2,6 +2,7 @@ package lab4;
 
 import jade.core.Agent;
 import jade.core.behaviours.CyclicBehaviour;
+import jade.core.behaviours.TickerBehaviour;
 import jade.lang.acl.ACLMessage;
 import java.io.*;
 import java.net.Socket;
@@ -21,6 +22,14 @@ public class AgentSmith extends Agent {
         System.out.println(getLocalName() + " is requesting Fibonacci(" + fibNumber + ").");
 
         // Add behavior to communicate with the server and request Fibonacci calculation
+        addBehaviour(new TickerBehaviour(this, 5000) {
+            protected void onTick() {
+                if (alive) {
+                    int fibNumber = rand.nextInt(40);  // Generate a random number between 0 and 39
+                    requestFibonacciFromServer(fibNumber);
+                }
+            }
+        });
         addBehaviour(new CyclicBehaviour() {
             public void action() {
                 // Always check for shutdown messages first
@@ -29,18 +38,11 @@ public class AgentSmith extends Agent {
                     takeDown();  // Call takeDown() for a clean shutdown
                     return;
                 }
-
-                // If the agent is alive, request a new random Fibonacci number from the server
-                if (alive) {
-                    int fibNumber = rand.nextInt(40);  // Generate a random number between 0 and 39
-                    requestFibonacciFromServer(fibNumber);
-                }
-
-                // Block for 5 seconds between requests
-                block(5000);
             }
         });
     }
+
+
 
     // Method to connect to the server and request Fibonacci calculation
     private void requestFibonacciFromServer(int number) {
